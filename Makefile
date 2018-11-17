@@ -9,6 +9,7 @@ GIT_HOOKS := .git/hooks/applied
 all: $(GIT_HOOKS)
 	$(CC) -o $(SERVER) $(CCFLAGS)  $(SERVER).c -lpthread
 	$(CC) -o $(CLIENT) $(CCFLAGS)  $(CLIENT).c -lpthread
+	gcc -pthread -std=gnu99 -ggdb -o server server.o threadpool/threadpool.o
 
 $(GIT_HOOKS):
 	@.githooks/install-git-hooks
