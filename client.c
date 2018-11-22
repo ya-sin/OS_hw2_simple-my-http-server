@@ -73,7 +73,6 @@ void readsocket(int sockfd,char *result,char* arg,char *query)
             //tmp = concat(tmp,con[j]);
             printf("%s %d\n",con[j],j);
             sprintf(qu,"GET %s %s",t,arg);
-            printf("%s\n",qu);
             // pack->fd = sockfd;
             // pack->request = qu;
             // pthread_t t;
@@ -153,7 +152,7 @@ int main(int argc, char *argv[])
 
     sprintf(get_str,"GET %s HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",query,ip,port);
     sprintf(arg,"HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",ip,port);
-    printf("%s", get_str);
+    // printf("%s", get_str);
     write_to_socket(sockfd, get_str);
 
     char *result = read_text_from_socket(sockfd);
