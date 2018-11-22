@@ -1,24 +1,100 @@
 #include "utils.h"
 #include "string_util.h"
 #include "threads.h"
-#include <assert.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <pthread.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <unistd.h>
+#include <pthread.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <assert.h>
+
 typedef struct sendpack {
     int fd;
     char *request;
 } sendpack;
+
+void init_sendpack(sendpack* arg,char*request,int fd);
+void readsocket(int sockfd,char *result,char* arg,char *query);
+
+int main(int argc, char *argv[])
+{
+    char request[200];
+    char *query = argv[2];
+    char *ip = argv[4];
+    char *port = argv[6];
+    int portnum;
+
+    portnum = atoi(port);
+
+    // argument checking
+    if (argc != 7) {
+        printf("Syntax: client <url>\n");
+        exit(1);
+    }
+
+//--------- connecting
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    // Check create socket or not
+    if (sockfd == -1) {
+        // error("socket");
+        printf("\n Error : Could not create socket\n");
+        return 1;
+    }
+
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr,0,sizeof(serv_addr));
+
+    // setting sockaddr_in
+    serv_addr.sin_family = PF_INET;
+    serv_addr.sin_port = htons(portnum);
+    serv_addr.sin_addr.s_addr = inet_addr(ip);
+
+    // serv_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    // inet_pton convert IPv4 and IPv6 addresses from text to binary form
+    // if(inet_pton(AF_INET, ip, &serv_addr.sin_addr)<=0) {
+    //     printf("\n inet_pton error occured\n");
+    //     return 1;
+    // }
+
+    // connect
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(struct sockaddr_in)) == -1) {
+        // Try running the client without the server started and you'll get this error
+        printf("\n Error : Connect Failed \n");
+        return 1;
+    }
+//---------- complete connecting
+
+    char *get_str = malloc(128 + strlen(query));
+    char *arg = malloc(128);
+
+    sprintf(get_str,"GET %s HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",query,ip,port);
+    sprintf(arg,"HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",ip,port);
+
+    // write to socket
+    write_to_socket(sockfd, get_str);
+
+    char *result = read_text_from_socket(sockfd);
+
+    readsocket(sockfd,result,arg,query);
+
+    free(get_str);
+    free(arg);
+    close(sockfd);
+
+    return 0;
+}
+
 void init_sendpack(sendpack* arg,char*request,int fd)
 {
     arg->fd = malloc(strlen(fd)*sizeof(int));
     arg->request = malloc(strlen(request)*sizeof(char));
+
     bzero(arg->request,strlen(request));
     bzero(arg->fd,strlen(fd));
 }
@@ -45,16 +121,16 @@ void readsocket(int sockfd,char *result,char* arg,char *query)
         i++;
     }
     i = 0;
-    // printf("q%s\n",result);
-    // printf("%s\n%d\n",*(test+1),strlen(test));
-    // dir
+
+    // cut the content into dir/file seperatly
     if(contains(*(test+1),"directory")) {
-        // get each content in the dir
-        char *con[20];
-        con[i] = strtok(*(test+4)," ");
-        while(con[i]!=NULL) {
+
+        // get each element in the content
+        char *ele[20];
+        ele[i] = strtok(*(test+4)," ");
+        while(ele[i]!=NULL) {
             i++;
-            con[i] = strtok(NULL," ");
+            ele[i] = strtok(NULL," ");
         }
         printf("%s\n", temp);
 
@@ -67,11 +143,11 @@ void readsocket(int sockfd,char *result,char* arg,char *query)
             //con[j] = concat("/",con[j]);
             char* p = malloc(256*sizeof(char));
             char* t = malloc(256*sizeof(char));
-            sprintf(p,"/%s",con[j]);
+            sprintf(p,"/%s",ele[j]);
             sprintf(t,"%s%s",tmp,p);
             free(p);
             //tmp = concat(tmp,con[j]);
-            printf("%s %d\n",con[j],j);
+            printf("%s %d\n",ele[j],j);
             sprintf(qu,"GET %s %s",t,arg);
             // pack->fd = sockfd;
             // pack->request = qu;
@@ -83,85 +159,10 @@ void readsocket(int sockfd,char *result,char* arg,char *query)
             free(t);
             free(qu);
         }
-    } else { // file
+    } else {
+        // file
         printf("%s\n\n", temp);
     }
     free(temp);
     free(result);
-}
-int main(int argc, char *argv[])
-{
-
-    char request[200];
-    char *query = argv[2];
-    char *ip = argv[4];
-    char *port = argv[6];
-    int portnum;
-
-    portnum = atoi(port);
-
-
-    // scanf("%s",ip);
-    // printf("query: %s",query);
-    // printf("ip: %s",ip);
-    // printf("port: %d",portnum);
-
-    if (argc != 7) {
-        printf("Syntax: client <url>\n");
-        exit(1);
-    }
-
-
-    // char *url = argv[1];
-// connecting
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-    // Check create socket or not
-    if (sockfd == -1) {
-        // error("socket");
-        printf("\n Error : Could not create socket\n");
-        return 1;
-    }
-
-
-    struct sockaddr_in serv_addr;
-
-    memset(&serv_addr,0,sizeof(serv_addr));
-    // setting sockaddr_in
-    serv_addr.sin_family = PF_INET;
-    serv_addr.sin_port = htons(portnum);
-    serv_addr.sin_addr.s_addr = inet_addr(ip);
-    // serv_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-    // inet_pton convert IPv4 and IPv6 addresses from text to binary form
-    // if(inet_pton(AF_INET, ip, &serv_addr.sin_addr)<=0) {
-    //     printf("\n inet_pton error occured\n");
-    //     return 1;
-    // }
-
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(struct sockaddr_in)) == -1) {
-        /* Try running the client without the server started and you'll get this error */
-        // error("connect");
-        printf("\n Error : Connect Failed \n");
-        return 1;
-    }
-// complete connecting
-
-    char *get_str = malloc(128 + strlen(query));
-    char *arg = malloc(128);
-
-    sprintf(get_str,"GET %s HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",query,ip,port);
-    sprintf(arg,"HTTP/1.x\r\nHOST: %s:%s\r\n\r\n",ip,port);
-    // printf("%s", get_str);
-    write_to_socket(sockfd, get_str);
-
-    char *result = read_text_from_socket(sockfd);
-
-    readsocket(sockfd,result,arg,query);
-
-    free(get_str);
-    free(arg);
-    close(sockfd);
-
-    return 0;
 }
