@@ -1,11 +1,5 @@
-/*
-Based on the requirements of this OS class project:
-http://pages.cs.wisc.edu/~dusseau/Classes/CS537-F07/Projects/P2/p2.html
-
-TODO: Clean up debug output.
-*/
-#include "threadpool/threadpool.h"
-#include "server.h"
+#include "utils.h"
+#include "string_util.h"
 
 #include <assert.h>
 #include <netinet/in.h>
@@ -15,15 +9,14 @@ TODO: Clean up debug output.
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
-
 
 const char* GET = "GET";
 const char* slash = "/";
-const char* CGI_BIN_PATH = "/cgi-bin/";
 
 char *root;
-
 const int MAX_CWD = 100;
 
 void writeln_to_socket(int sockfd, const char *message)
@@ -50,38 +43,20 @@ void print_type(int sockfd, int mode)
     case 5:
         writeln_to_socket(sockfd, "Content-Type: application/json");
         break;
+    case 6:
+        writeln_to_socket(sockfd, "Content-Type: directory");
+        break;
     default:
         writeln_to_socket(sockfd, "Content-Type:");
         break;
     }
 }
 
-void write_content_to_socket(int sockfd, const char *content, int mode)
-{
-    char length_str[100];
-    sprintf(length_str, "%d", (int)strlen(content));
-
-    char *content_length_str = concat("Content-Length: ", length_str);
-    print_type(sockfd, mode);
-    writeln_to_socket(sockfd, "Server: httpserver/1.x");
-    // writeln_to{_socket(sockfd, content_length_str);
-    if(mode) {
-        writeln_to_socket(sockfd, "");
-        writeln_to_socket(sockfd, content);
-    }
-
-    free(content_length_str);
-}
-
-
 void http_404_reply(int sockfd)
 {
     writeln_to_socket(sockfd, "HTTP/1.x 404 Not_FOUND");
     writeln_to_socket(sockfd, "Content-Type:");
     writeln_to_socket(sockfd, "Server: httpserver/1.x");
-
-    // static const char *content = "<html><body><h1>Not found</h1></body></html>\r\n";
-    // write_content_to_socket(sockfd, content);
 }
 
 void http_400_reply(int sockfd)
@@ -98,18 +73,38 @@ void http_405_reply(int sockfd)
     writeln_to_socket(sockfd, "Server: httpserver/1.x");
 }
 
+void http_415_reply(int sockfd)
+{
+    writeln_to_socket(sockfd, "HTTP/1.x 415 UNSUPPORT_MEDIA_TYPE");
+    writeln_to_socket(sockfd, "Content-Type:");
+    writeln_to_socket(sockfd, "Server: httpserver/1.x");
+}
+
 void http_get_reply(int sockfd, const char *content, int mode)
 {
-    if(mode)
-        writeln_to_socket(sockfd, "HTTP/1.x 200 OK");
-    else
-        writeln_to_socket(sockfd, "HTTP/1.x 415 UNSUPPORT_MEDIA_TYPE");
-    write_content_to_socket(sockfd, content, mode);
+
+    writeln_to_socket(sockfd, "HTTP/1.x 200 OK");
+    // char length_str[100];
+    // sprintf(length_str, "%d", (int)strlen(content));
+
+    // char *content_length_str = concat("Content-Length: ", length_str);
+    print_type(sockfd, mode);
+    writeln_to_socket(sockfd, "Server: httpserver/1.x");
+    // writeln_to{_socket(sockfd, content_length_str);
+
+    writeln_to_socket(sockfd, "");
+    writeln_to_socket(sockfd, content);
+
+    // free(content_length_str);
 }
 
 int is_get(char *text)
 {
     return starts_with(text, GET);
+}
+int is_slash(char *text)
+{
+    return starts_with(text, slash);
 }
 
 char *get_path(char *text)
@@ -124,12 +119,6 @@ char *get_path(char *text)
     path[pathlen] = '\0';
 
     return path;
-}
-
-int is_cgi_bin_request(const char *path)
-{
-    if (contains(path, "/cgi-bin/")) return 1;
-    return 0;
 }
 
 char *read_file(FILE *fpipe)
@@ -157,81 +146,83 @@ char *read_file(FILE *fpipe)
     return buf;
 }
 
-struct request_pair {
-    char *path;
-    char *query;
-};
-
-struct request_pair extract_query(const char *cgipath_param)
+int is_regular_file(char *path)
 {
-    struct request_pair ret;
-    char *qq = strchr(cgipath_param, '?');
 
-    if (qq == NULL) {
-        ret.path = strdup(cgipath_param);
-        ret.query = NULL;
-    } else {
-        int path_len = qq - cgipath_param;
-        ret.path = malloc(path_len + 1);
-        strncpy(ret.path, cgipath_param, path_len);
-        ret.path[path_len] = 0;
-
-        int query_len = strlen(cgipath_param) - path_len - 1;
-        ret.query = malloc(query_len + 1);
-        const char* query_start_pos = cgipath_param + path_len + 1;
-        strncpy(ret.query, query_start_pos, query_len);
-        ret.query[query_len] = '\0';
+    struct stat buf;
+    int result;
+    result = stat(path, &buf);
+    if(result!=0)
+        printf("fail");
+    else {
+        return S_ISDIR(buf.st_mode);
     }
-
-    return ret;
+    return 0;
 }
-
-void run_cgi(int sockfd, const char *curdir, const char *cgipath_param)
+void output_static_file(int sockfd,char *fullpath,int mode)
 {
-    char *fullpath;
-    struct request_pair req = extract_query(cgipath_param);
 
-    char *params;
-    if (req.query) {
-        params = malloc(strlen(req.query) + 100);
-        sprintf(params, "QUERY_STRING='%s' ", req.query);
-    } else {
-        params = strdup("");
-    }
+    printf("Opening static file: [%s]\n\n", fullpath);
 
-    if (ends_with(req.path, ".py")) {
-        // TODO: Overflow possible?
-        fullpath = concat4(params, "python ", curdir, req.path);
-    } else {
-        fullpath = concat3(params, curdir, req.path);
-    }
+    FILE *f = fopen(fullpath, "r");
 
-    free(params);
-    free(req.path);
-    free(req.query);
-
-    printf("Executing: [%s]\n", fullpath);
-
-    FILE *fpipe = popen(fullpath, "r");
-    free(fullpath);
-
-    if (!fpipe) {
-        perror("Problem with popen");
+    if (!f) {
+        perror("Problem with fopen");
         http_404_reply(sockfd);
     } else {
-        char* result = read_file(fpipe);
-        http_get_reply(sockfd, result,0);
+        char *result = read_file(f);
+        http_get_reply(sockfd, result,mode);
         free(result);
     }
+    fclose(f);
 }
-
-void output_static_file(int sockfd, const char *curdir, char *path)
+void output_folder(int sockfd,char *fullpath,int mode)
 {
-    char* fullpath = malloc(strlen(curdir) + strlen(path) + 1);
-    int mode = 0;
-    int test400 = 0;
-    strcpy(fullpath, curdir);
+
+    printf("Opening static folder: [%s]\n\n", fullpath);
+    DIR *dir;
+    struct dirent *ent;
+    char *result= malloc(256*sizeof(char));
+    memset(result, 0, 256);
+    // open directory
+    dir = opendir(fullpath);
+    if(dir == NULL) {
+        printf("canot open");
+        free(result);
+        http_404_reply(sockfd);
+    } else {
+        // list all the dir/file in directory
+        while((ent = readdir(dir))!=NULL) {
+            if(strcmp(ent->d_name,".")!=0 && strcmp(ent->d_name,"..")!=0) {
+                strcat(result, ent->d_name);
+                strcat(result, " ");
+                //result = concat(result,ent->d_name);
+                //result = concat(result," ");
+            }
+        }
+        result = strcat(result,"\0");
+        closedir(dir);
+        http_get_reply(sockfd, result,mode);
+        free(result);
+    }
+
+}
+void *handle_socket_thread(void* sockfd_arg)
+{
+    int sockfd = *((int *)sockfd_arg);
+
+    printf("Handling socket: %d\n\n", sockfd);
+
+    char *text = read_text_from_socket(sockfd);
+    printf("From socket: \n%s\n", text);
+    char *path = get_path(text);
+    char* fullpath = malloc(strlen(root) + strlen(path) + 1);
+
+    strcpy(fullpath, root);
     strcat(fullpath, path);
+    printf("%s\n",fullpath);
+    int flag = is_regular_file(fullpath);
+    int mode = 0;
 
     mode = ends_with(path,".htm")  == 1 ? 1:mode;
     mode = ends_with(path,".html") == 1 ? 1:mode;
@@ -242,58 +233,44 @@ void output_static_file(int sockfd, const char *curdir, char *path)
     mode = ends_with(path,".cc")   == 1 ? 4:mode;
     mode = ends_with(path,".json") == 1 ? 5:mode;
 
-    test400 = starts_with(path,slash);
+    printf("flag %d   mode %d\n",flag,mode);
 
-    printf("Opening static file: [%s]\n", fullpath);
-
-    FILE *f = fopen(fullpath, "r");
-    if(test400) {
-        if (!f) {
-            perror("Problem with fopen");
-            http_404_reply(sockfd);
+    if(flag==1 || flag ==4) {
+        if (is_slash(path)) {
+            if(is_get(text)) {
+                printf("enter\n");
+                mode = 6;
+                output_folder(sockfd,fullpath,mode);
+                printf("back\n");
+            } else {
+                http_405_reply(sockfd);
+            }
         } else {
-            char *result = read_file(f);
-            http_get_reply(sockfd, result,mode);
-            free(result);
+            http_400_reply(sockfd);
         }
     } else {
-        http_400_reply(sockfd);
-    }
-    fclose(f);
-}
+        printf("file\n");
+        if (is_slash(path)) {
 
-void *handle_socket_thread(void* sockfd_arg)
-{
-    int sockfd = *((int *)sockfd_arg);
+            if(is_get(text)) {
+                if(mode) {
+                    printf("cwd[%s]\n", root);
+                    printf("path[%s]\n", path);
+                    output_static_file(sockfd, fullpath,mode);
+                    free(path);
+                } else {
+                    http_415_reply(sockfd);
+                }
+            } else {
+                http_405_reply(sockfd);
+            }
 
-    printf("Handling socket: %d\n", sockfd);
-
-    char *text = read_text_from_socket(sockfd);
-    printf("From socket: %s\n\n", text);
-
-    if (is_get(text)) {
-        // char curdir[MAX_CWD];
-
-        // if (!getcwd(curdir, MAX_CWD)) {
-        //   error("Couldn't read curdir");
-        // }
-
-        char *path = get_path(text);
-
-        if (is_cgi_bin_request(path)) {
-            run_cgi(sockfd, root, path);
         } else {
-            printf("cwd[%s]\n", root);
-            printf("path[%s]\n", path);
-            output_static_file(sockfd, root, path);
+            // The server only supports GET.
+            http_400_reply(sockfd);
         }
-
-        free(path);
-    } else {
-        // The server only supports GET.
-        http_405_reply(sockfd);
     }
-
+    free(fullpath);
     free(text);
     close(sockfd);
     free(sockfd_arg);
@@ -301,45 +278,10 @@ void *handle_socket_thread(void* sockfd_arg)
     return NULL;
 }
 
-int create_listening_socket(int portnum)
-{
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        error("ERROR opening socket");
-    }
-    int setopt = 1;
-
-    // Reuse the port. Otherwise, on restart, port 8000 is usually still occupied for a bit
-    // and we need to start at another port.
-    if (-1 == setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&setopt, sizeof(setopt))) {
-        error("ERROR setting socket options");
-    }
-
-    struct sockaddr_in serv_addr;
-
-    uint16_t port = portnum;
-
-    while (1) {
-        bzero(&serv_addr, sizeof(serv_addr));
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(port);
-        serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-        if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
-            port++;
-        } else {
-            break;
-        }
-    }
-
-    if (listen(sockfd, SOMAXCONN) < 0) error("Couldn't listen");
-    printf("Running on port: %d\n", port);
-
-    return sockfd;
-}
 int main(int argc, char *argv[])
 {
 
+    // read argv
     root = argv[2];
     char *port = argv[4];
     char *thread = argv[6];
@@ -348,22 +290,50 @@ int main(int argc, char *argv[])
     portnum = atoi(port);
     threadnum = atoi(thread);
 
-    int sockfd = create_listening_socket(portnum);
+    // create socket
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        error("ERROR opening socket");
+    }
 
+    // setting socket info
+    struct sockaddr_in serv_addr;
+
+    memset(&serv_addr,0,sizeof(serv_addr));
+
+    serv_addr.sin_family = PF_INET;
+    serv_addr.sin_port = htons(portnum);
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // bind socket and address
+    int n = bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr));
+    printf("%d\n", n);
+    // setting listening list and capacity  SOMAXCONN
+    if (listen(sockfd, 5) < 0) error("Couldn't listen");
+
+    printf("Running on port: %d\n", portnum);
+//--------complete
+
+    // making a threadpool
+    struct thread_pool* pool = pool_init(threadnum);
+    printf("Testing threadpool of %d threads.\n", pool_get_max_threads(pool));
+
+    // accept the client one by one
     struct sockaddr_in client_addr;
     int cli_len = sizeof(client_addr);
-
-    struct thread_pool* pool = pool_init(threadnum);
 
     while (1) {
         int newsockfd = accept(sockfd, (struct sockaddr *) &client_addr, (socklen_t *) &cli_len);
         if (newsockfd < 0) error("Error on accept");
         printf("New socket: %d\n", newsockfd);
 
+        // view newsockfd as argument for task's workrountine
         int *arg = malloc(sizeof(int));
         *arg = newsockfd;
         pool_add_task(pool, handle_socket_thread, arg);
     }
+
+    // close socket
     close(sockfd);
 
     return 0;
